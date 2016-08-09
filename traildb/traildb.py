@@ -31,6 +31,7 @@ tdb_val     = c_uint64
 tdb_item    = c_uint64
 tdb_cursor  = c_void_p
 tdb_error   = c_int
+tdb_event_filter = c_void_p
 
 class tdb_event(Structure):
     _fields_ = [("timestamp", c_uint64),
@@ -78,6 +79,12 @@ api(lib.tdb_cursor_free, [tdb])
 api(lib.tdb_cursor_next, [tdb_cursor], POINTER(tdb_event))
 api(lib.tdb_get_trail, [tdb_cursor, c_uint64], tdb_error)
 api(lib.tdb_get_trail_length, [tdb_cursor], c_uint64)
+api(lib.tdb_cursor_set_event_filter, [tdb_cursor, tdb_event_filter], tdb_error)
+
+api(lib.tdb_event_filter_new, [], tdb_event_filter)
+api(lib.tdb_event_filter_add_term, [tdb_event_filter, tdb_item, c_int], tdb_error)
+api(lib.tdb_event_filter_new_clause, [tdb_event_filter], tdb_error)
+api(lib.tdb_event_filter_free, [tdb_event_filter])
 
 
 def uuid_hex(uuid):
@@ -193,12 +200,22 @@ class TrailDBCursor(object):
     returned by TrailDB.trail().
     """
 
-    def __init__(self, cursor, cls, valuefun, parsetime, only_timestamp):
+    def __init__(self,
+                 cursor,
+                 cls,
+                 valuefun,
+                 parsetime,
+                 only_timestamp,
+                 event_filter_obj):
         self.cursor = cursor
         self.valuefun = valuefun
         self.parsetime = parsetime
         self.cls = cls
         self.only_timestamp = only_timestamp
+        if event_filter_obj:
+            self.event_filter_obj = event_filter_obj
+            if lib.tdb_cursor_set_event_filter(cursor, event_filter_obj.flt):
+                raise TrailDBError("cursor_set_event_filter failed")
 
     def __del__(self):
         if self.cursor:
@@ -279,24 +296,38 @@ class TrailDB(object):
         for i in xrange(len(self)):
             yield self.get_uuid(i), self.trail(i, **kwds)
 
-    def trail(self, i, parsetime=False, rawitems=False, only_timestamp=False):
+    def trail(self,
+              trail_id,
+              parsetime=False,
+              rawitems=False,
+              only_timestamp=False,
+              event_filter=None):
         """Return a cursor over a single trail.
 
-        i -- Trail ID.
+        trail_id -- Trail ID.
         parsetime=False -- Return datetime objects instead of integer timestamps.
         rawitems=False -- Return integer items instead of string values.
         only_timestamp=False -- Return only timestamps, not event objects.
+        event_filter=None -- Apply an event filter to this cursor.
         """
         cursor = lib.tdb_cursor_new(self._db)
-        if lib.tdb_get_trail(cursor, i) != 0:
+        if lib.tdb_get_trail(cursor, trail_id) != 0:
             raise TrailDBError("Failed to create cursor")
+
+        if isinstance(event_filter, TrailDBEventFilter):
+            event_filter_obj = event_filter
+        elif event_filter:
+            event_filter_obj = TrailDBEventFilter(event_filter, self)
+        else:
+            event_filter_obj = None
 
         valuefun = None if rawitems else self.get_item_value
         return TrailDBCursor(cursor,
                              self._event_cls,
                              valuefun,
                              parsetime,
-                             only_timestamp)
+                             only_timestamp,
+                             event_filter_obj)
 
     def field(self, fieldish):
         """Return a field ID given a field name."""
@@ -379,3 +410,33 @@ class TrailDB(object):
         """Return the maximum time stamp of this TrailDB."""
         return lib.tdb_max_timestamp(self._db)
 
+
+class TrailDBEventFilter(object):
+    def __init__(self, query, db):
+        self.flt = lib.tdb_event_filter_new()
+        if type(query[0]) is tuple:
+            query = [query]
+        for i, clause in enumerate(query):
+            if i > 0:
+                err = lib.tdb_event_filter_new_clause(self.flt)
+                if err:
+                    raise TrailDBError("Out of memory in _create_filter")
+            for term in clause:
+                is_negative = False
+                if len(term) == 3:
+                    field, value, is_negative = term
+                else:
+                    field, value = term
+                try:
+                    item = db.get_item(field, value)
+                except TrailDBError, ValueError:
+                    item = 0
+                print item, is_negative
+                err = lib.tdb_event_filter_add_term(self.flt,
+                                                    item,
+                                                    1 if is_negative else 0)
+                if err:
+                    raise TrailDBError("Out of memory in _create_filter")
+
+    def __del__(self):
+        lib.tdb_event_filter_free(self.flt)
