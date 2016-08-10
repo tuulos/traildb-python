@@ -317,7 +317,7 @@ class TrailDB(object):
         if isinstance(event_filter, TrailDBEventFilter):
             event_filter_obj = event_filter
         elif event_filter:
-            event_filter_obj = TrailDBEventFilter(event_filter, self)
+            event_filter_obj = self.create_filter(event_filter)
         else:
             event_filter_obj = None
 
@@ -410,9 +410,11 @@ class TrailDB(object):
         """Return the maximum time stamp of this TrailDB."""
         return lib.tdb_max_timestamp(self._db)
 
+    def create_filter(self, event_filter):
+        return TrailDBEventFilter(self, event_filter)
 
 class TrailDBEventFilter(object):
-    def __init__(self, query, db):
+    def __init__(self, db, query):
         self.flt = lib.tdb_event_filter_new()
         if type(query[0]) is tuple:
             query = [query]
@@ -431,7 +433,6 @@ class TrailDBEventFilter(object):
                     item = db.get_item(field, value)
                 except TrailDBError, ValueError:
                     item = 0
-                print item, is_negative
                 err = lib.tdb_event_filter_add_term(self.flt,
                                                     item,
                                                     1 if is_negative else 0)
