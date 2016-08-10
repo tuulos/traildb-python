@@ -5,7 +5,7 @@ import unittest
 import datetime
 
 from traildb import TrailDB, TrailDBConstructor, tdb_item_field, tdb_item_val
-from traildb import TrailDBError, TrailDBCursor
+from traildb import TrailDBError, TrailDBCursor, TrailDBEventFilter
 
 class TestAPI(unittest.TestCase):
     def setUp(self):
@@ -87,6 +87,53 @@ class TestAPI(unittest.TestCase):
         self.assertEqual((1, 3), db.time_range())
 
         self.assertEqual((1, 3), db.time_range(parsetime = False))
+
+class TestFilter(unittest.TestCase):
+
+    def setUp(self):
+        uuid = '12345678123456781234567812345678'
+        cons = TrailDBConstructor('testtrail', ['field1', 'field2', 'field3'])
+        cons.add(uuid, 1, ['a', '1', 'x'])
+        cons.add(uuid, 2, ['b', '2', 'x'])
+        cons.add(uuid, 3, ['c', '3', 'y'])
+        cons.add(uuid, 4, ['d', '4', 'x'])
+        cons.add(uuid, 5, ['e', '5', 'x'])
+        tdb = cons.finalize()
+
+    def tearDown(self):
+        os.unlink('testtrail.tdb')
+
+    def test_simple_disjunction(self):
+        tdb = TrailDB('testtrail')
+        # test shorthand notation (not a list of lists)
+        events = list(tdb.trail(0, event_filter=[('field1', 'a'), ('field2', '4')]))
+        self.assertEqual(len(events), 2)
+        self.assertEqual((events[0].field1, events[0].field2), ('a', '1'))
+        self.assertEqual((events[1].field1, events[1].field2), ('d', '4'))
+
+    def test_negation(self):
+        tdb = TrailDB('testtrail')
+        events = list(tdb.trail(0, event_filter=[('field3', 'x', True)]))
+        self.assertEqual(len(events), 1)
+        self.assertEqual((events[0].field1, events[0].field2, events[0].field3), ('c', '3', 'y'))
+
+    def test_conjunction(self):
+        tdb = TrailDB('testtrail')
+        events = list(tdb.trail(0, event_filter=[[('field1', 'e'), ('field1', 'c')],
+                                                 [('field3', 'y', True)]]))
+        self.assertEqual(len(events), 1)
+        self.assertEqual((events[0].field1, events[0].field2), ('e', '5'))
+
+    def test_filter_object(self):
+        tdb = TrailDB('testtrail')
+        obj = tdb.create_filter([[('field1', 'e'), ('field1', 'c')],
+                                 [('field3', 'y', True)]])
+        events = list(tdb.trail(0, event_filter=obj))
+        self.assertEqual(len(events), 1)
+        self.assertEqual((events[0].field1, events[0].field2), ('e', '5'))
+        events = list(tdb.trail(0, event_filter=obj))
+        self.assertEqual(len(events), 1)
+        self.assertEqual((events[0].field1, events[0].field2), ('e', '5'))
 
 
 class TestCons(unittest.TestCase):
