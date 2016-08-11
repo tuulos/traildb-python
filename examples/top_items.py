@@ -1,4 +1,4 @@
-from traildb import TrailDB, tdb_item_val
+from traildb import TrailDB
 from collections import Counter
 import timeit
 
